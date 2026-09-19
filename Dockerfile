@@ -14,7 +14,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 COPY --from=build /app/package.json /app/package-lock.json ./
-RUN npm ci --include=dev --omit=optional
+RUN npm ci --include=dev
 
 COPY --from=build /app/server ./server
 COPY --from=build /app/shared ./shared

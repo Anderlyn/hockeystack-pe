@@ -7,9 +7,11 @@ import type {
     ModelMessage,
     ToolCall,
     ToolSpec,
+    TokenUsage,
 } from "../model";
-import { config } from "../../config";
+import type { Config } from "../../config";
 import { ProviderError } from "../../exceptions";
+import { logger } from "../../logger";
 
 const toGeminiSchema = (schema: unknown): unknown => {
     if (!schema || typeof schema !== "object") return schema;
@@ -69,14 +71,39 @@ const toContents = (messages: ModelMessage[]) => {
     return contents;
 };
 
+interface UsageMeta {
+    promptTokenCount?: number;
+    candidatesTokenCount?: number;
+    cachedContentTokenCount?: number;
+}
+
+const readUsage = (meta: UsageMeta | undefined): TokenUsage => {
+    const prompt = meta?.promptTokenCount ?? 0;
+    const cached = meta?.cachedContentTokenCount ?? 0;
+    return {
+        uncachedInputTokens: Math.max(0, prompt - cached),
+        cachedInputTokens: cached,
+        cacheWriteTokens: 0,
+        outputTokens: meta?.candidatesTokenCount ?? 0,
+    };
+};
+
 export class GeminiModel implements ChatModel {
     readonly id: string;
     private readonly ai: GoogleGenAI;
     private readonly model: string;
+    private readonly maxTokens: number;
+    private readonly cacheTtlSeconds: number;
+    private cacheName: string | null = null;
+    private cacheExpiresAt = 0;
+    private cacheDisabled = false;
+    private cacheInFlight: Promise<string | null> | null = null;
 
-    constructor(model: string, location: string) {
+    constructor(model: string, location: string, config: Config) {
         this.model = model;
         this.id = `gemini:${model}`;
+        this.maxTokens = config.maxOutputTokens;
+        this.cacheTtlSeconds = config.cacheTtlSeconds;
         this.ai = new GoogleGenAI({
             vertexai: true,
             project: config.projectId,
@@ -84,25 +111,71 @@ export class GeminiModel implements ChatModel {
         });
     }
 
+    private async ensureCache(
+        system: string,
+        tools: unknown,
+    ): Promise<string | null> {
+        if (this.cacheDisabled) return null;
+        if (this.cacheName && Date.now() < this.cacheExpiresAt)
+            return this.cacheName;
+        if (this.cacheInFlight) return this.cacheInFlight;
+
+        this.cacheInFlight = (async () => {
+            try {
+                const cache = await this.ai.caches.create({
+                    model: this.model,
+                    config: {
+                        systemInstruction: system,
+                        tools: tools as never,
+                        ttl: `${this.cacheTtlSeconds}s`,
+                    },
+                });
+                this.cacheName = cache.name ?? null;
+                this.cacheExpiresAt =
+                    Date.now() + (this.cacheTtlSeconds - 60) * 1000;
+                if (!this.cacheName) this.cacheDisabled = true;
+                else
+                    logger.info("gemini.cache.created", {
+                        name: this.cacheName,
+                    });
+                return this.cacheName;
+            } catch (err) {
+                this.cacheDisabled = true;
+                logger.warn("gemini.cache.disabled", { error: err });
+                return null;
+            } finally {
+                this.cacheInFlight = null;
+            }
+        })();
+        return this.cacheInFlight;
+    }
+
     async runTurn(
         req: TurnRequest,
         onText: (delta: string) => void,
     ): Promise<AssistantTurn> {
         try {
+            const tools = toTools(req.tools);
+            const cached = await this.ensureCache(req.system, tools);
+            const config = cached
+                ? { cachedContent: cached, maxOutputTokens: this.maxTokens }
+                : {
+                      systemInstruction: req.system,
+                      tools: tools as never,
+                      maxOutputTokens: this.maxTokens,
+                  };
+
             const stream = await this.ai.models.generateContentStream({
                 model: this.model,
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                contents: toContents(req.messages) as any,
-                config: {
-                    systemInstruction: req.system,
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    tools: toTools(req.tools) as any,
-                },
+                contents: toContents(req.messages) as never,
+                config,
             });
 
             let text = "";
             const toolCalls: ToolCall[] = [];
+            let usageMeta: UsageMeta | undefined;
             for await (const chunk of stream) {
+                if (chunk.usageMetadata) usageMeta = chunk.usageMetadata;
                 const parts = chunk.candidates?.[0]?.content?.parts ?? [];
                 for (const part of parts) {
                     if (part.functionCall) {
@@ -127,6 +200,7 @@ export class GeminiModel implements ChatModel {
                 text,
                 toolCalls,
                 stopReason: toolCalls.length > 0 ? "tool_use" : "end",
+                usage: readUsage(usageMeta),
             };
         } catch (err) {
             throw new ProviderError("Gemini (Vertex)", this.model, err);

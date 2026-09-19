@@ -7,16 +7,24 @@ import type {
     ModelMessage,
     ToolCall,
     ToolSpec,
+    TokenUsage,
 } from "../model";
-import { config } from "../../config";
+import type { Config } from "../../config";
 import { ProviderError } from "../../exceptions";
 
+const CACHE_CONTROL = { type: "ephemeral" } as const;
+
 const toTools = (tools: ToolSpec[]): Anthropic.Tool[] =>
-    tools.map((t) => ({
+    tools.map((t, index) => ({
         name: t.name,
         description: t.description,
         input_schema: t.parameters as Anthropic.Tool["input_schema"],
+        ...(index === tools.length - 1 ? { cache_control: CACHE_CONTROL } : {}),
     }));
+
+const toSystem = (system: string): Anthropic.TextBlockParam[] => [
+    { type: "text", text: system, cache_control: CACHE_CONTROL },
+];
 
 const toMessages = (messages: ModelMessage[]): Anthropic.MessageParam[] =>
     messages.map((m): Anthropic.MessageParam => {
@@ -43,14 +51,40 @@ const toMessages = (messages: ModelMessage[]): Anthropic.MessageParam[] =>
         return { role: "user", content: blocks };
     });
 
+const withPrefixCache = (
+    messages: Anthropic.MessageParam[],
+): Anthropic.MessageParam[] => {
+    const last = messages[messages.length - 1];
+    if (!last) return messages;
+    const blocks = Array.isArray(last.content)
+        ? last.content
+        : [{ type: "text", text: last.content } as Anthropic.ContentBlockParam];
+    const lastBlock = blocks[blocks.length - 1];
+    if (!lastBlock) return messages;
+    const cachedBlocks = [
+        ...blocks.slice(0, -1),
+        { ...lastBlock, cache_control: CACHE_CONTROL },
+    ];
+    return [...messages.slice(0, -1), { ...last, content: cachedBlocks }];
+};
+
+const readUsage = (usage: Anthropic.Usage): TokenUsage => ({
+    uncachedInputTokens: usage.input_tokens ?? 0,
+    cachedInputTokens: usage.cache_read_input_tokens ?? 0,
+    cacheWriteTokens: usage.cache_creation_input_tokens ?? 0,
+    outputTokens: usage.output_tokens ?? 0,
+});
+
 export class AnthropicModel implements ChatModel {
     readonly id: string;
     private readonly client: AnthropicVertex;
     private readonly model: string;
+    private readonly maxTokens: number;
 
-    constructor(model: string, location: string) {
+    constructor(model: string, location: string, config: Config) {
         this.model = model;
         this.id = `anthropic:${model}`;
+        this.maxTokens = config.maxOutputTokens;
         this.client = new AnthropicVertex({
             projectId: config.projectId,
             region: location,
@@ -64,10 +98,10 @@ export class AnthropicModel implements ChatModel {
         try {
             const stream = this.client.messages.stream({
                 model: this.model,
-                max_tokens: 4096,
-                system: req.system,
+                max_tokens: this.maxTokens,
+                system: toSystem(req.system),
                 tools: toTools(req.tools),
-                messages: toMessages(req.messages),
+                messages: withPrefixCache(toMessages(req.messages)),
             });
             stream.on("text", (delta: string) => onText(delta));
             const msg = await stream.finalMessage();
@@ -88,6 +122,7 @@ export class AnthropicModel implements ChatModel {
                 text,
                 toolCalls,
                 stopReason: msg.stop_reason === "tool_use" ? "tool_use" : "end",
+                usage: readUsage(msg.usage),
             };
         } catch (err) {
             throw new ProviderError("Anthropic (Vertex)", this.model, err);

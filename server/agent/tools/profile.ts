@@ -1,8 +1,7 @@
 import type { AgentTool } from "./types";
-import { getTableInfo, internalQuery, dailyTable } from "../../bq/client";
+import { dailyTable } from "../../bq/dataset";
 import { UnknownDimensionError } from "../../exceptions";
 
-// A
 const DIMENSIONS: Record<string, (table: string) => string> = {
     event_name: (t) =>
         `SELECT event_name AS value, COUNT(*) AS count FROM ${t} GROUP BY 1 ORDER BY count DESC LIMIT 100`,
@@ -45,14 +44,14 @@ export const profileTool: AgentTool = {
             required: ["dimension"],
         },
     },
-    async execute(input) {
+    async execute(input, ctx) {
         const dim = (input as { dimension?: string })?.dimension;
         if (!dim || !(dim in DIMENSIONS)) {
             throw new UnknownDimensionError(dim ?? "(none)", SUPPORTED);
         }
-        const info = await getTableInfo();
+        const info = await ctx.bq.getTableInfo();
         const sql = DIMENSIONS[dim](dailyTable(info.latest));
-        const { rows } = await internalQuery(sql);
+        const { rows } = await ctx.bq.internalQuery(sql);
         const lines = rows
             .map((r) => `${String(r.value)} (${String(r.count)})`)
             .join("\n");

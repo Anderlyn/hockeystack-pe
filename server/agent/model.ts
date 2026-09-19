@@ -30,10 +30,18 @@ export type ModelMessage =
 
 export type StopReason = "tool_use" | "end";
 
+export interface TokenUsage {
+    uncachedInputTokens: number;
+    cachedInputTokens: number;
+    cacheWriteTokens: number;
+    outputTokens: number;
+}
+
 export interface AssistantTurn {
     text: string;
     toolCalls: ToolCall[];
     stopReason: StopReason;
+    usage: TokenUsage;
 }
 
 export interface TurnRequest {

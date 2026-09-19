@@ -1,15 +1,16 @@
-import { memo, useMemo } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatedText } from "../AnimatedText";
 import { type ChatTurn as ChatTurnData } from "../../hooks/useChat";
-import type { ChartSpec, SSEEvent } from "../../../../shared/events";
+import type { SSEEvent } from "../../../../shared/events";
 import {
     DataTable,
     D3BarChart,
     D3GroupedBarChart,
     D3LineChart,
-    type BarDatum,
-    type GroupedBarDatum,
 } from "../../../../shared/visualizations";
+import { assistantDisplayText } from "../../lib/assistantText";
+import { chartData, groupedChartData } from "../../lib/chartData";
+import { toolLabels, toolSteps } from "../../lib/toolSteps";
 
 const STYLES: Record<string, React.CSSProperties> = {
     turn: {
@@ -91,6 +92,7 @@ const STYLES: Record<string, React.CSSProperties> = {
         color: "#2b3852",
         background: "#f1f4fa",
         borderBottomLeftRadius: "4px",
+        animation: "chart-reveal 420ms ease-out both",
     },
     chart: {
         padding: "1rem",
@@ -102,141 +104,6 @@ const STYLES: Record<string, React.CSSProperties> = {
     chartTitle: {
         margin: "0 0 1rem",
     },
-};
-
-const chartData = (
-    event: Extract<SSEEvent, { type: "sql_result" }>,
-    spec: ChartSpec,
-): BarDatum[] => {
-    const [valueColumn] = spec.y;
-    const labelColumn = spec.x;
-    if (!labelColumn || !valueColumn) return [];
-    return event.rows.flatMap((row) => {
-        const value = row[valueColumn];
-        return typeof value === "number"
-            ? [{ label: String(row[labelColumn] ?? ""), value }]
-            : [];
-    });
-};
-
-const groupedChartData = (
-    event: Extract<SSEEvent, { type: "sql_result" }>,
-    spec: ChartSpec,
-): GroupedBarDatum[] =>
-    event.rows.flatMap((row) => {
-        const label = row[spec.x];
-        if (label === null || label === undefined) return [];
-        const values = Object.fromEntries(
-            spec.y.map((column) => [
-                column,
-                typeof row[column] === "number" ? row[column] : 0,
-            ]),
-        );
-        return [{ label: String(label), values }];
-    });
-
-const sanitizeAssistantText = (text: string): string =>
-    text
-        .replace(
-            /(?:Rendered|Created|Built)\s+(?:a|an)\s+\w+(?:\s+\w+)*\s+chart\b[^.!?\n]*(?:from\s+)?res_[\w-]+\.?/gi,
-            "",
-        )
-        .replace(/\s*\(x=[^)\n]+,\s*y=[^)\n]+\)/gi, "")
-        .replace(
-            /(?:result_id|bytes_scanned|columns|total_rows)\s*:\s*[^\n]*/gi,
-            "",
-        )
-        .replace(/\bres_[\w-]+\b/gi, "")
-        .replace(/\s+\./g, ".")
-        .replace(/[ \t]{2,}/g, " ")
-        .replace(/\n{3,}/g, "\n\n")
-        .trim();
-
-const visualText = (text: string, hasVisual: boolean): string => {
-    const sanitized = sanitizeAssistantText(text);
-    if (
-        !hasVisual &&
-        !sanitized.includes("|") &&
-        !/(?:here(?:'s| is)|this is)\s+(?:the\s+)?(?:table|chart)\b/i.test(
-            sanitized,
-        )
-    ) {
-        return sanitized;
-    }
-    return sanitized
-        .split(/\n+/)
-        .filter((line) => {
-            const normalized = line.trim().toLowerCase();
-            return (
-                !line.includes("|") &&
-                !/(?:here(?:'s| is)|this is)\s+(?:the\s+)?(?:table|chart)\b/.test(
-                    normalized,
-                )
-            );
-        })
-        .join("\n")
-        .trim();
-};
-
-const mergeText = (segments: string[]): string => {
-    const merged: string[] = [];
-    for (const segment of segments) {
-        const value = segment.trim();
-        if (!value) continue;
-        const previous = merged[merged.length - 1];
-        if (!previous || previous === value || previous.includes(value)) {
-            if (!previous) merged.push(value);
-            continue;
-        }
-        if (value.includes(previous)) {
-            merged[merged.length - 1] = value;
-            continue;
-        }
-        merged.push(value);
-    }
-    return merged.join("\n\n");
-};
-
-const assistantSegments = (events: SSEEvent[]): string[] => {
-    const segments: string[] = [];
-    let current = "";
-    for (const event of events) {
-        if (event.type === "assistant_delta") {
-            current += event.text;
-        } else if (current) {
-            segments.push(current);
-            current = "";
-        }
-    }
-    if (current) segments.push(current);
-    return segments;
-};
-
-const toolLabels: Record<string, string> = {
-    get_schema: "Understanding your data",
-    profile: "Inspecting your data",
-    run_sql: "Querying your data",
-    render_chart: "Building your chart",
-};
-
-type ToolStep = {
-    id: string;
-    name: string;
-    status: "active" | "complete" | "error";
-};
-
-const toolSteps = (events: SSEEvent[]): ToolStep[] => {
-    const steps: ToolStep[] = [];
-    for (const event of events) {
-        if (event.type === "tool_call") {
-            steps.push({ id: event.id, name: event.name, status: "active" });
-        }
-        if (event.type === "tool_result") {
-            const step = steps.find((item) => item.id === event.id);
-            if (step) step.status = event.ok ? "complete" : "error";
-        }
-    }
-    return steps;
 };
 
 const ChartMessage = memo(
@@ -298,17 +165,28 @@ export const ChatTurn = memo(
                 event.type === "chart",
         );
         const isComplete = turn.events.some((event) => event.type === "done");
-        const displayText = visualText(
-            mergeText(assistantSegments(turn.events)),
+        const displayText = assistantDisplayText(
+            turn.events,
             charts.length > 0,
         );
+        const [textSettled, setTextSettled] = useState(
+            displayText.length === 0,
+        );
+        useEffect(() => {
+            setTextSettled(displayText.length === 0);
+        }, [displayText]);
+        const handleTextComplete = useCallback(() => setTextSettled(true), []);
+        const showCharts = isComplete && textSettled;
         if (displayText) {
             messages.push(
                 <div
                     style={{ ...STYLES.message, ...STYLES.assistantMessage }}
                     key="assistant-text"
                 >
-                    <AnimatedText text={displayText} />
+                    <AnimatedText
+                        text={displayText}
+                        onComplete={handleTextComplete}
+                    />
                 </div>,
             );
         }
@@ -329,22 +207,26 @@ export const ChatTurn = memo(
                 );
             }
         });
-        charts.forEach((chart, index) => {
-            const result = turn.events.find(
-                (event): event is Extract<SSEEvent, { type: "sql_result" }> =>
-                    event.type === "sql_result" &&
-                    event.result_id === chart.spec.result_id,
-            );
-            if (result) {
-                messages.push(
-                    <ChartMessage
-                        key={`chart-${chart.spec.result_id}-${index}`}
-                        event={chart}
-                        result={result}
-                    />,
+        if (showCharts) {
+            charts.forEach((chart, index) => {
+                const result = turn.events.find(
+                    (
+                        event,
+                    ): event is Extract<SSEEvent, { type: "sql_result" }> =>
+                        event.type === "sql_result" &&
+                        event.result_id === chart.spec.result_id,
                 );
-            }
-        });
+                if (result) {
+                    messages.push(
+                        <ChartMessage
+                            key={`chart-${chart.spec.result_id}-${index}`}
+                            event={chart}
+                            result={result}
+                        />,
+                    );
+                }
+            });
+        }
         const steps = toolSteps(turn.events);
         const shouldShowProgress = steps.length > 0 || !isComplete;
         const progressMessage = shouldShowProgress ? (

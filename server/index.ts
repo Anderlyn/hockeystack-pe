@@ -3,16 +3,19 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { SSEEvent, ChatMessage } from "../shared/events";
-import { runAgent } from "./agent/loop";
-import { resolveModel } from "./agent/models";
-import { config } from "./config";
-import { AppError, DailyPromptLimitError, errorMessage } from "./exceptions";
-import { consumeDailyPrompt, dailyUsage } from "./rate-limit";
+import { createContainer } from "./container";
+import {
+    AppError,
+    BudgetExceededError,
+    DailyPromptLimitError,
+    errorMessage,
+} from "./exceptions";
 import { requireFirebaseAuth } from "./auth";
 import { logger } from "./logger";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const active = resolveModel(config.model);
+const container = createContainer();
+const { config, agent, usage, activeModel } = container;
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
@@ -48,9 +51,9 @@ const validateChatMessages = (
         if (content.length === 0) {
             return { error: "Messages cannot be empty." };
         }
-        if (content.length > config.maxPromptChars) {
+        if (message.role === "user" && content.length > config.maxPromptChars) {
             return {
-                error: `Each message is limited to ${config.maxPromptChars} characters.`,
+                error: `Each question is limited to ${config.maxPromptChars} characters.`,
             };
         }
         totalChars += content.length;
@@ -66,17 +69,8 @@ const validateChatMessages = (
     return { messages };
 };
 
-app.get("/api/health", async (_req, res) => {
-    const usage = await dailyUsage();
-    res.json({
-        ok: true,
-        provider: active.provider,
-        model: active.id,
-        location: active.location,
-        project: config.projectId,
-        usage,
-    });
-    logger.debug("health.request.complete");
+app.get("/api/health", (_req, res) => {
+    res.json({ ok: true });
 });
 
 app.post("/api/chat", requireFirebaseAuth, async (req, res) => {
@@ -95,27 +89,32 @@ app.post("/api/chat", requireFirebaseAuth, async (req, res) => {
             requestId,
             reason: validation.error,
         });
-        res.status(400).json({
-            error: validation.error,
-        });
+        res.status(400).json({ error: validation.error });
         return;
     }
     const messages = validation.messages;
 
-    if (!req.firebaseUser?.uid) {
+    const userId = req.firebaseUser?.uid;
+    if (!userId) {
         res.status(401).json({ error: "Authenticated user is missing." });
         return;
     }
 
-    let usage;
+    let usageSnapshot;
     try {
-        usage = await consumeDailyPrompt();
+        usageSnapshot = await usage.consumePrompt(userId);
     } catch (err) {
-        if (err instanceof DailyPromptLimitError) {
-            logger.warn("chat.request.quota_exceeded", { requestId });
+        if (
+            err instanceof DailyPromptLimitError ||
+            err instanceof BudgetExceededError
+        ) {
+            logger.warn("chat.request.quota_exceeded", {
+                requestId,
+                code: err.code,
+            });
             res.status(429).json({
                 error: err.message,
-                usage: await dailyUsage(),
+                usage: await usage.dailyUsage(userId),
             });
             return;
         }
@@ -132,8 +131,8 @@ app.post("/api/chat", requireFirebaseAuth, async (req, res) => {
     };
 
     try {
-        send({ type: "usage", usage });
-        await runAgent(messages, send);
+        send({ type: "usage", usage: usageSnapshot });
+        await agent.run(userId, messages, send);
         logger.info("chat.request.complete", {
             requestId,
             durationMs: Math.round(performance.now() - startedAt),
@@ -182,8 +181,8 @@ app.use((req, res) => {
 app.listen(config.port, () => {
     logger.info("server.started", {
         port: config.port,
-        provider: active.provider,
-        model: active.id,
+        provider: activeModel.provider,
+        model: activeModel.id,
         project: config.projectId,
     });
 });

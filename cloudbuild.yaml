@@ -9,13 +9,13 @@ steps:
       args:
           - build
           - -t
-          - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPOSITORY}/${_SERVICE}:$COMMIT_SHA
+          - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPOSITORY}/${_SERVICE}:$BUILD_ID
           - .
 
     - name: gcr.io/cloud-builders/docker
       args:
           - push
-          - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPOSITORY}/${_SERVICE}:$COMMIT_SHA
+          - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPOSITORY}/${_SERVICE}:$BUILD_ID
 
     - name: gcr.io/google.com/cloudsdktool/cloud-sdk
       entrypoint: gcloud
@@ -24,7 +24,7 @@ steps:
           - deploy
           - ${_SERVICE}
           - --image
-          - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPOSITORY}/${_SERVICE}:$COMMIT_SHA
+          - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPOSITORY}/${_SERVICE}:$BUILD_ID
           - --region
           - ${_REGION}
           - --platform
@@ -38,7 +38,7 @@ steps:
           - GOOGLE_CLOUD_PROJECT=$PROJECT_ID,MODEL=gemini-2.5-flash,BQ_LOCATION=US,MAX_BYTES_BILLED=5000000000,MAX_TURNS=8,MAX_PROMPTS_PER_DAY=50,MAX_PROMPT_CHARS=4000,MAX_CONVERSATION_CHARS=16000,MAX_CONVERSATION_MESSAGES=20,LOG_LEVEL=info
 
 images:
-    - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPOSITORY}/${_SERVICE}:$COMMIT_SHA
+    - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPOSITORY}/${_SERVICE}:$BUILD_ID
 
 options:
     logging: CLOUD_LOGGING_ONLY

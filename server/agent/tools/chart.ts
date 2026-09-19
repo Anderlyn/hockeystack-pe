@@ -1,5 +1,4 @@
 import type { AgentTool } from "./types";
-import { getCachedResult } from "../../bq/client";
 import type { ChartType } from "../../../shared/events";
 import {
     ToolInputError,
@@ -57,7 +56,7 @@ export const renderChartTool: AgentTool = {
             );
         }
 
-        const cached = getCachedResult(result_id);
+        const cached = ctx.bq.getResult(result_id);
         if (!cached) throw new ResultNotFoundError(result_id);
 
         const missing = [x, ...y].filter((c) => !cached.columns.includes(c));

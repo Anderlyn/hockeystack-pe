@@ -62,20 +62,25 @@ export const useChat = (): ChatState & {
                 return;
             }
 
-            const history = state.turns.flatMap((turn) => [
-                turn.message,
-                ...turn.events
+            const history = state.turns.flatMap((turn) => {
+                const assistantText = turn.events
                     .filter(
                         (
                             event,
                         ): event is { type: "assistant_delta"; text: string } =>
                             event.type === "assistant_delta",
                     )
-                    .map((event) => ({
-                        role: "assistant" as const,
-                        content: event.text,
-                    })),
-            ]);
+                    .map((event) => event.text)
+                    .join("");
+                const messages: ChatMessage[] = [turn.message];
+                if (assistantText.trim()) {
+                    messages.push({
+                        role: "assistant",
+                        content: assistantText,
+                    });
+                }
+                return messages;
+            });
             const turn: ChatTurn = { message: userMessage, events: [] };
 
             setState((current) => ({

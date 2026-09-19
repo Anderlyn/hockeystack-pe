@@ -1,5 +1,4 @@
 import type { AgentTool } from "./types";
-import { runSql } from "../../bq/client";
 import { ToolInputError } from "../../exceptions";
 
 export const runSqlTool: AgentTool = {
@@ -26,7 +25,7 @@ export const runSqlTool: AgentTool = {
             );
         }
 
-        const result = await runSql(query);
+        const result = await ctx.bq.runSql(query);
 
         ctx.emit({
             type: "sql_result",

@@ -50,7 +50,15 @@ const STYLES: Record<string, React.CSSProperties> = {
 interface AnimatedTextProps {
     text: string;
     speed?: number;
+    onComplete?: () => void;
 }
+
+const commonPrefixLength = (a: string, b: string): number => {
+    const max = Math.min(a.length, b.length);
+    let index = 0;
+    while (index < max && a[index] === b[index]) index++;
+    return index;
+};
 
 const MARKDOWN_COMPONENTS = {
     p: ({ children }: { children?: React.ReactNode }) => (
@@ -91,15 +99,23 @@ const MARKDOWN_COMPONENTS = {
 const AnimatedTextComponent = ({
     text,
     speed = 12,
+    onComplete,
 }: AnimatedTextProps): React.JSX.Element => {
     const [visibleText, setVisibleText] = useState("");
     const visibleTextRef = useRef("");
     const previousTextRef = useRef("");
+    const completedRef = useRef(false);
 
     useEffect(() => {
         if (visibleText.length >= text.length) {
+            if (text.length > 0 && !completedRef.current) {
+                completedRef.current = true;
+                onComplete?.();
+            }
             return;
         }
+
+        completedRef.current = false;
 
         const timer = window.setTimeout(() => {
             const nextText = text.slice(0, visibleText.length + 1);
@@ -108,14 +124,19 @@ const AnimatedTextComponent = ({
         }, speed);
 
         return () => window.clearTimeout(timer);
-    }, [speed, text, visibleText]);
+    }, [speed, text, visibleText, onComplete]);
 
     useEffect(() => {
         const previousText = previousTextRef.current;
         previousTextRef.current = text;
         if (previousText && !text.startsWith(previousText)) {
-            visibleTextRef.current = text;
-            setVisibleText(text);
+            const shown = Math.min(
+                visibleTextRef.current.length,
+                commonPrefixLength(visibleTextRef.current, text),
+            );
+            const clamped = text.slice(0, shown);
+            visibleTextRef.current = clamped;
+            setVisibleText(clamped);
         }
     }, [text]);
 
