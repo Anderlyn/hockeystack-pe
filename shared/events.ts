@@ -19,6 +19,13 @@ export interface ChatMessage {
     content: string;
 }
 
+export interface DailyUsage {
+    day: string;
+    used: number;
+    remaining: number;
+    limit: number;
+}
+
 /**
  * These events are streamed to the client so the client knows what to render after each step.
  */
@@ -41,5 +48,6 @@ export type SSEEvent =
           bytes_processed: number;
       }
     | { type: "chart"; spec: ChartSpec }
+    | { type: "usage"; usage: DailyUsage }
     | { type: "error"; message: string }
     | { type: "done" };

@@ -10,6 +10,9 @@
         "dev": "tsx watch server/index.ts",
         "start": "tsx server/index.ts",
         "typecheck": "tsc --noEmit",
+        "typecheck:client": "tsc -p client/tsconfig.json --noEmit",
+        "client:dev": "vite --config client/vite.config.ts",
+        "client:build": "vite build --config client/vite.config.ts",
         "format": "prettier --write .",
         "format:check": "prettier --check ."
     },
@@ -18,13 +21,26 @@
         "@anthropic-ai/vertex-sdk": "^0.19.10",
         "@google-cloud/bigquery": "^9.1.0",
         "@google/genai": "^2.23.0",
-        "express": "^4.22.3"
+        "d3": "^7.9.0",
+        "dotenv": "^18.0.1",
+        "express": "^4.22.3",
+        "firebase": "^12.19.0",
+        "firebase-admin": "^14.4.0",
+        "react": "^19.1.1",
+        "react-dom": "^19.1.1",
+        "react-markdown": "^10.1.0",
+        "react-router-dom": "^7.18.4"
     },
     "devDependencies": {
+        "@types/d3": "^7.4.3",
         "@types/express": "^4.17.25",
         "@types/node": "^26.6.2",
+        "@types/react": "^19.1.13",
+        "@types/react-dom": "^19.1.9",
+        "@vitejs/plugin-react": "^5.0.4",
         "prettier": "^3.9.8",
         "tsx": "^4.23.13",
-        "typescript": "^7.0.2"
+        "typescript": "^7.0.2",
+        "vite": "^7.1.5"
     }
 }

@@ -1,6 +1,5 @@
 import { AppError, errorMessage } from "./base";
 
-/** The configured MODEL isn't in the catalog and doesn't match a known prefix. */
 export class UnknownModelError extends AppError {
     readonly code = "UNKNOWN_MODEL";
     constructor(id: string) {

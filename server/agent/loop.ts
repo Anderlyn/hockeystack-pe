@@ -16,6 +16,10 @@ export const runAgent = async (
             ? { role: "assistant", content: m.content, toolCalls: [] }
             : { role: "user", content: m.content },
     );
+    const toolContext = {
+        emit,
+        chartRenders: 0,
+    };
 
     for (let turn = 0; turn < config.maxTurns; turn++) {
         const assistant = await model.runTurn(
@@ -43,7 +47,7 @@ export const runAgent = async (
                 name: tc.name,
                 input: tc.input,
             });
-            const outcome = await dispatchTool(tc.name, tc.input, { emit });
+            const outcome = await dispatchTool(tc.name, tc.input, toolContext);
             emit({
                 type: "tool_result",
                 id: tc.id,

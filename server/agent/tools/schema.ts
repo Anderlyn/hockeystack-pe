@@ -1,7 +1,6 @@
 import type { AgentTool } from "./types";
 import { getTableInfo, internalQuery, DATASET } from "../../bq/client";
 
-// Static after first build: INFORMATION_SCHEMA + date range don't change per request.
 let cached: string | null = null;
 
 const buildSchema = async (): Promise<string> => {
@@ -19,9 +18,10 @@ const buildSchema = async (): Promise<string> => {
         .join("\n");
     cached =
         `GA4 export dataset: ${DATASET}\n` +
-        `Daily tables: events_YYYYMMDD  (wildcard: events_*)\n` +
+        `Daily tables: events_YYYYMMDD (wildcard: \`bigquery-public-data.ga4_obfuscated_sample_ecommerce.events_*\`)\n` +
         `Available date range: ${info.earliestSuffix} to ${info.latestSuffix}\n` +
         `ALWAYS filter _TABLE_SUFFIX BETWEEN '<start>' AND '<end>' to control cost.\n\n` +
+        `For item quantity, use items.quantity after UNNEST(items); item_quantity is not a valid field.\n\n` +
         `Nested field paths (from ${info.latest}):\n${fields}`;
     return cached;
 };

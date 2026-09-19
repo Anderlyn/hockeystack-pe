@@ -43,7 +43,7 @@ export class InvalidChartColumnsError extends AppError {
     }
 }
 
-// Tjhe tool was called with a result_id that is not a chartable result.
+// The tool was called with a result_id that is not a chartable result.
 export class UnknownDimensionError extends AppError {
     readonly code = "UNKNOWN_DIMENSION";
     constructor(dimension: string, supported: string[]) {

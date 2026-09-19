@@ -37,6 +37,13 @@ export const renderChartTool: AgentTool = {
         },
     },
     async execute(input, ctx) {
+        if (ctx.chartRenders >= 1) {
+            return {
+                content:
+                    "Only one chart may be rendered per request. Use the existing chart instead of rendering another.",
+                is_error: true,
+            };
+        }
         const { result_id, type, x, y, title } = (input ?? {}) as {
             result_id?: string;
             type?: ChartType;
@@ -63,8 +70,9 @@ export const renderChartTool: AgentTool = {
         }
 
         ctx.emit({ type: "chart", spec: { result_id, type, x, y, title } });
+        ctx.chartRenders += 1;
         return {
-            content: `Rendered a ${type} chart (x=${x}, y=${y.join(", ")}) from ${result_id}.`,
+            content: "The visualization is ready.",
         };
     },
 };

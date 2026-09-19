@@ -3,6 +3,7 @@ import type { ToolSpec } from "../model";
 
 export interface ToolContext {
     emit: (event: SSEEvent) => void;
+    chartRenders: number;
 }
 
 export interface ToolExecResult {

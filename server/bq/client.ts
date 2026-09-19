@@ -23,9 +23,6 @@ export interface QueryResult {
     bytes_processed: number;
 }
 
-// Single-instance result cache so render_chart and follow-ups can address prior
-// result sets by id without the model re-typing data. Production would move this
-// to Redis/Firestore (see preliminary-analysis.md → Cut).
 const resultCache = new Map<string, { columns: string[]; rows: Row[] }>();
 
 const normalize = (value: unknown): Primitive => {
@@ -37,7 +34,6 @@ const normalize = (value: unknown): Primitive => {
     ) {
         return value;
     }
-    // BigQuery wraps DATE/TIMESTAMP/NUMERIC etc. as objects carrying a `value` string.
     if (
         typeof value === "object" &&
         "value" in (value as Record<string, unknown>)
@@ -87,8 +83,6 @@ const columnsFrom = (
     return rows.length > 0 ? Object.keys(rows[0]) : [];
 };
 
-// Run a BigQuery operation, wrapping any BigQuery/transport failure in a typed
-// error that preserves BigQuery's own message (so the model can self-correct).
 const runBq = async <T>(query: string, op: () => Promise<T>): Promise<T> => {
     try {
         return await op();
@@ -109,10 +103,6 @@ const dryRunBytes = async (query: string): Promise<number> =>
         return total ? Number(total) : 0;
     });
 
-/**
- * Low-level query for the schema/profile tools: parameterized, not cached, not
- * streamed. Still pinned to the dataset location with a byte cap as a backstop.
- */
 export const internalQuery = async (
     query: string,
     params?: Record<string, unknown>,
@@ -132,10 +122,6 @@ export const internalQuery = async (
         };
     });
 
-/**
- * Model-facing query: read-only guard -> dry-run cost check -> execute with a
- * hard maximumBytesBilled -> cache the full result under a result_id.
- */
 export const runSql = async (query: string): Promise<QueryResult> => {
     assertReadOnly(query);
 
@@ -180,7 +166,6 @@ let tableInfo: {
     latestSuffix: string;
 } | null = null;
 
-/** Earliest/latest daily table (and their YYYYMMDD suffixes), cached. */
 export const getTableInfo = async () => {
     if (tableInfo) return tableInfo;
     const { rows } = await internalQuery(

@@ -6,7 +6,7 @@ export const runSqlTool: AgentTool = {
     definition: {
         name: "run_sql",
         description:
-            "Run a read-only BigQuery Standard SQL query against the GA4 dataset. Returns a 20-row sample plus a result_id; the full result set is streamed to the user's screen. Always filter _TABLE_SUFFIX to control cost.",
+            "Run a read-only BigQuery Standard SQL query against the GA4 dataset. Returns a 20-row sample plus a result_id; the full result set is streamed to the user's screen. Always use backticks around the fully qualified events_* wildcard and filter _TABLE_SUFFIX to control cost.",
         parameters: {
             type: "object",
             properties: {
@@ -28,7 +28,6 @@ export const runSqlTool: AgentTool = {
 
         const result = await runSql(query);
 
-        // Full result set goes to the browser; the model only sees a small sample.
         ctx.emit({
             type: "sql_result",
             result_id: result.result_id,

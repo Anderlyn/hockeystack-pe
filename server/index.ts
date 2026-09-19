@@ -7,6 +7,7 @@ import { resolveModel } from "./agent/models";
 import { config } from "./config";
 import { AppError, DailyPromptLimitError, errorMessage } from "./exceptions";
 import { consumeDailyPrompt, dailyUsage } from "./rate-limit";
+import { requireFirebaseAuth } from "./auth";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const active = resolveModel(config.model);
@@ -14,31 +15,91 @@ const active = resolveModel(config.model);
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 
-app.get("/api/health", (_req, res) => {
+const validateChatMessages = (
+    value: unknown,
+): { messages?: ChatMessage[]; error?: string } => {
+    if (!Array.isArray(value) || value.length === 0) {
+        return { error: "Body must include a non-empty 'messages' array." };
+    }
+    if (value.length > config.maxConversationMessages) {
+        return {
+            error: `Conversation is limited to ${config.maxConversationMessages} messages.`,
+        };
+    }
+
+    let totalChars = 0;
+    const messages: ChatMessage[] = [];
+    for (const message of value) {
+        if (
+            !message ||
+            typeof message !== "object" ||
+            !("role" in message) ||
+            !("content" in message) ||
+            (message.role !== "user" && message.role !== "assistant") ||
+            typeof message.content !== "string"
+        ) {
+            return {
+                error: "Each message must have a user or assistant role and text content.",
+            };
+        }
+        const content = message.content.trim();
+        if (content.length === 0) {
+            return { error: "Messages cannot be empty." };
+        }
+        if (content.length > config.maxPromptChars) {
+            return {
+                error: `Each message is limited to ${config.maxPromptChars} characters.`,
+            };
+        }
+        totalChars += content.length;
+        messages.push({ role: message.role, content });
+    }
+
+    if (totalChars > config.maxConversationChars) {
+        return {
+            error: `Conversation is limited to ${config.maxConversationChars} total characters.`,
+        };
+    }
+
+    return { messages };
+};
+
+app.get("/api/health", async (_req, res) => {
+    const usage = await dailyUsage();
     res.json({
         ok: true,
         provider: active.provider,
         model: active.id,
         location: active.location,
         project: config.projectId,
-        usage: dailyUsage(),
+        usage,
     });
 });
 
-app.post("/api/chat", async (req, res) => {
-    const messages = (req.body?.messages ?? []) as ChatMessage[];
-    if (!Array.isArray(messages) || messages.length === 0) {
+app.post("/api/chat", requireFirebaseAuth, async (req, res) => {
+    const validation = validateChatMessages(req.body?.messages);
+    if (validation.error || !validation.messages) {
         res.status(400).json({
-            error: "Body must include a non-empty 'messages' array.",
+            error: validation.error,
         });
         return;
     }
+    const messages = validation.messages;
 
+    if (!req.firebaseUser?.uid) {
+        res.status(401).json({ error: "Authenticated user is missing." });
+        return;
+    }
+
+    let usage;
     try {
-        consumeDailyPrompt();
+        usage = await consumeDailyPrompt();
     } catch (err) {
         if (err instanceof DailyPromptLimitError) {
-            res.status(429).json({ error: err.message });
+            res.status(429).json({
+                error: err.message,
+                usage: await dailyUsage(),
+            });
             return;
         }
         throw err;
@@ -54,6 +115,7 @@ app.post("/api/chat", async (req, res) => {
     };
 
     try {
+        send({ type: "usage", usage });
         await runAgent(messages, send);
     } catch (err) {
         if (err instanceof AppError) {
