@@ -1,4 +1,5 @@
 import express from "express";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { SSEEvent, ChatMessage } from "../shared/events";
@@ -8,6 +9,7 @@ import { config } from "./config";
 import { AppError, DailyPromptLimitError, errorMessage } from "./exceptions";
 import { consumeDailyPrompt, dailyUsage } from "./rate-limit";
 import { requireFirebaseAuth } from "./auth";
+import { logger } from "./logger";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const active = resolveModel(config.model);
@@ -74,11 +76,25 @@ app.get("/api/health", async (_req, res) => {
         project: config.projectId,
         usage,
     });
+    logger.debug("health.request.complete");
 });
 
 app.post("/api/chat", requireFirebaseAuth, async (req, res) => {
+    const startedAt = performance.now();
+    const requestId = randomUUID();
+    logger.info("chat.request.start", {
+        requestId,
+        userId: req.firebaseUser?.uid,
+        messageCount: Array.isArray(req.body?.messages)
+            ? req.body.messages.length
+            : 0,
+    });
     const validation = validateChatMessages(req.body?.messages);
     if (validation.error || !validation.messages) {
+        logger.warn("chat.request.invalid", {
+            requestId,
+            reason: validation.error,
+        });
         res.status(400).json({
             error: validation.error,
         });
@@ -96,6 +112,7 @@ app.post("/api/chat", requireFirebaseAuth, async (req, res) => {
         usage = await consumeDailyPrompt();
     } catch (err) {
         if (err instanceof DailyPromptLimitError) {
+            logger.warn("chat.request.quota_exceeded", { requestId });
             res.status(429).json({
                 error: err.message,
                 usage: await dailyUsage(),
@@ -117,15 +134,26 @@ app.post("/api/chat", requireFirebaseAuth, async (req, res) => {
     try {
         send({ type: "usage", usage });
         await runAgent(messages, send);
+        logger.info("chat.request.complete", {
+            requestId,
+            durationMs: Math.round(performance.now() - startedAt),
+        });
     } catch (err) {
         if (err instanceof AppError) {
-            console.error(
-                `[chat] ${err.code}: ${err.message}`,
-                err.details ?? {},
-            );
+            logger.error("chat.request.error", {
+                requestId,
+                code: err.code,
+                message: err.message,
+                details: err.details,
+                durationMs: Math.round(performance.now() - startedAt),
+            });
             send({ type: "error", message: err.message });
         } else {
-            console.error("[chat] unexpected error:", err);
+            logger.error("chat.request.unexpected_error", {
+                requestId,
+                error: err,
+                durationMs: Math.round(performance.now() - startedAt),
+            });
             send({
                 type: "error",
                 message: `Unexpected server error: ${errorMessage(err)}`,
@@ -152,7 +180,10 @@ app.use((req, res) => {
 });
 
 app.listen(config.port, () => {
-    console.log(
-        `Server on :${config.port} (provider=${active.provider}, model=${active.id}, project=${config.projectId})`,
-    );
+    logger.info("server.started", {
+        port: config.port,
+        provider: active.provider,
+        model: active.id,
+        project: config.projectId,
+    });
 });

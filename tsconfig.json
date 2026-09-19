@@ -12,6 +12,6 @@
         "forceConsistentCasingInFileNames": true,
         "noEmit": true
     },
-    "include": ["server", "shared"],
+    "include": ["server", "shared", "evals"],
     "exclude": ["shared/visualizations"]
 }

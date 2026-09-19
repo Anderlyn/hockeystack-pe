@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from "express";
 import { getAuth } from "firebase-admin/auth";
 import type { DecodedIdToken } from "firebase-admin/auth";
 import "./firebase-admin";
+import { logger } from "./logger";
 
 declare global {
     namespace Express {
@@ -30,7 +31,7 @@ export const requireFirebaseAuth = async (
         req.firebaseUser = await getAuth().verifyIdToken(token);
         next();
     } catch (error) {
-        console.error("[auth] Invalid Firebase ID token:", error);
+        logger.warn("auth.invalid_token", { error });
         res.status(401).json({ error: "Invalid authentication token." });
     }
 };

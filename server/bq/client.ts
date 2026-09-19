@@ -9,6 +9,8 @@ import {
     BigQueryExecutionError,
     errorMessage,
 } from "../exceptions";
+import { logger } from "../logger";
+import { validateReadOnlyQuery } from "./query-policy";
 
 export const DATASET = "bigquery-public-data.ga4_obfuscated_sample_ecommerce";
 export const EVENTS_WILDCARD = `\`${DATASET}.events_*\``;
@@ -50,27 +52,6 @@ const normalizeRows = (rows: Record<string, unknown>[]): Row[] =>
         return out;
     });
 
-const assertReadOnly = (sql: string): void => {
-    const stripped = sql
-        .replace(/--[^\n]*/g, "")
-        .replace(/\/\*[\s\S]*?\*\//g, "")
-        .trim();
-    const first = stripped.split(/\s+/)[0]?.toUpperCase() ?? "";
-    if (first !== "SELECT" && first !== "WITH") {
-        throw new ReadOnlyQueryError(
-            `it must be a single statement starting with SELECT or WITH (got "${first || "empty query"}").`,
-        );
-    }
-    const dml = stripped.match(
-        /\b(INSERT|UPDATE|DELETE|MERGE|CREATE|DROP|ALTER|TRUNCATE|GRANT|REVOKE|CALL|EXPORT)\b/i,
-    );
-    if (dml) {
-        throw new ReadOnlyQueryError(
-            `it contains the disallowed statement keyword "${dml[1].toUpperCase()}". This tool is read-only.`,
-        );
-    }
-};
-
 const columnsFrom = (
     apiResponse:
         { schema?: { fields?: { name?: string | null }[] } } | undefined,
@@ -87,20 +68,38 @@ const runBq = async <T>(query: string, op: () => Promise<T>): Promise<T> => {
     try {
         return await op();
     } catch (err) {
-        if (err instanceof AppError) throw err;
+        if (err instanceof AppError) {
+            logger.warn("bigquery.operation.failure", {
+                code: err.code,
+                message: err.message,
+                query,
+            });
+            throw err;
+        }
+        logger.error("bigquery.operation.error", {
+            error: err,
+            query,
+        });
         throw new BigQueryExecutionError(errorMessage(err), query, err);
     }
 };
 
 const dryRunBytes = async (query: string): Promise<number> =>
     runBq(query, async () => {
+        const startedAt = performance.now();
+        logger.debug("bigquery.dry_run.start", { query });
         const [job] = await bq.createQueryJob({
             query,
             dryRun: true,
             location: config.bqLocation,
         });
         const total = job.metadata?.statistics?.totalBytesProcessed;
-        return total ? Number(total) : 0;
+        const bytes = total ? Number(total) : 0;
+        logger.info("bigquery.dry_run.complete", {
+            bytesProcessed: bytes,
+            durationMs: Math.round(performance.now() - startedAt),
+        });
+        return bytes;
     });
 
 export const internalQuery = async (
@@ -108,6 +107,8 @@ export const internalQuery = async (
     params?: Record<string, unknown>,
 ): Promise<{ columns: string[]; rows: Row[] }> =>
     runBq(query, async () => {
+        const startedAt = performance.now();
+        logger.debug("bigquery.internal_query.start", { query });
         const [job] = await bq.createQueryJob({
             query,
             params,
@@ -116,17 +117,33 @@ export const internalQuery = async (
         });
         const [rows, , apiResponse] = await job.getQueryResults();
         const typedRows = rows as Record<string, unknown>[];
-        return {
+        const result = {
             columns: columnsFrom(apiResponse, typedRows),
             rows: normalizeRows(typedRows),
         };
+        logger.info("bigquery.internal_query.complete", {
+            rowCount: result.rows.length,
+            columnCount: result.columns.length,
+            durationMs: Math.round(performance.now() - startedAt),
+        });
+        return result;
     });
 
 export const runSql = async (query: string): Promise<QueryResult> => {
-    assertReadOnly(query);
+    const startedAt = performance.now();
+    logger.info("bigquery.query.start", {
+        query,
+        queryLength: query.length,
+    });
+    validateReadOnlyQuery(query);
 
     const bytes = await dryRunBytes(query);
     if (bytes > config.maxBytesBilled) {
+        logger.warn("bigquery.query.cost_limit", {
+            bytesProcessed: bytes,
+            maxBytesBilled: config.maxBytesBilled,
+            durationMs: Math.round(performance.now() - startedAt),
+        });
         throw new QueryCostLimitError(bytes, config.maxBytesBilled);
     }
 
@@ -146,6 +163,13 @@ export const runSql = async (query: string): Promise<QueryResult> => {
 
     const result_id = `res_${randomUUID().slice(0, 8)}`;
     resultCache.set(result_id, { columns, rows });
+    logger.info("bigquery.query.complete", {
+        resultId: result_id,
+        rowCount: rows.length,
+        columnCount: columns.length,
+        bytesProcessed: bytes,
+        durationMs: Math.round(performance.now() - startedAt),
+    });
     return {
         result_id,
         columns,

@@ -103,20 +103,23 @@ export class GeminiModel implements ChatModel {
             let text = "";
             const toolCalls: ToolCall[] = [];
             for await (const chunk of stream) {
-                const t = chunk.text;
-                if (t) {
-                    text += t;
-                    onText(t);
-                }
-                const fcs = chunk.functionCalls;
-                if (fcs) {
-                    for (const fc of fcs) {
+                const parts = chunk.candidates?.[0]?.content?.parts ?? [];
+                for (const part of parts) {
+                    if (part.functionCall) {
                         toolCalls.push({
                             id: `call_${randomUUID().slice(0, 8)}`,
-                            name: fc.name ?? "",
-                            input: (fc.args ?? {}) as Record<string, unknown>,
+                            name: part.functionCall.name ?? "",
+                            input: (part.functionCall.args ?? {}) as Record<
+                                string,
+                                unknown
+                            >,
                         });
                     }
+                    if (part.thought || typeof part.text !== "string") {
+                        continue;
+                    }
+                    text += part.text;
+                    onText(part.text);
                 }
             }
 

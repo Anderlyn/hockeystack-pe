@@ -15,5 +15,6 @@ export const config = {
     maxPromptChars: Number(env("MAX_PROMPT_CHARS", "4000")),
     maxConversationChars: Number(env("MAX_CONVERSATION_CHARS", "16000")),
     maxConversationMessages: Number(env("MAX_CONVERSATION_MESSAGES", "20")),
+    logLevel: env("LOG_LEVEL", "info"),
     port: Number(env("PORT", "8080")),
 } as const;

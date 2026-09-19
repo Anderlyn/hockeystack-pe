@@ -346,7 +346,8 @@ export const ChatTurn = memo(
             }
         });
         const steps = toolSteps(turn.events);
-        const progressMessage = isComplete ? null : (
+        const shouldShowProgress = steps.length > 0 || !isComplete;
+        const progressMessage = shouldShowProgress ? (
             <div
                 style={{ ...STYLES.message, ...STYLES.assistantMessage }}
                 key="progress"
@@ -407,7 +408,7 @@ export const ChatTurn = memo(
                     </ol>
                 )}
             </div>
-        );
+        ) : null;
         return (
             <article style={STYLES.turn}>
                 <div style={{ ...STYLES.message, ...STYLES.userMessage }}>

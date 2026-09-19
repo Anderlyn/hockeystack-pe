@@ -11,6 +11,8 @@
         "start": "tsx server/index.ts",
         "typecheck": "tsc --noEmit",
         "typecheck:client": "tsc -p client/tsconfig.json --noEmit",
+        "evals": "tsx evals/run.ts",
+        "evals:model": "tsx evals/model-run.ts",
         "client:dev": "vite --config client/vite.config.ts",
         "client:build": "vite build --config client/vite.config.ts",
         "format": "prettier --write .",
