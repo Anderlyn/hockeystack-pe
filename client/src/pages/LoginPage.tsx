@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 
-const STYLES = {
+const STYLES: Record<string, React.CSSProperties> = {
     page: {
         display: "grid",
         minHeight: "100vh",
@@ -10,39 +10,39 @@ const STYLES = {
         padding: "1.5rem",
         background:
             "radial-gradient(circle at 20% 0%, #e9edff 0, transparent 35%), #f5f7fb",
-    } satisfies React.CSSProperties,
+    },
     card: {
         width: "min(100%, 430px)",
         padding: "3rem",
         border: "1px solid #e3e7f0",
         borderRadius: "20px",
         background: "#fff",
-    } satisfies React.CSSProperties,
+    },
     heading: {
         margin: 0,
         letterSpacing: "-0.04em",
         fontSize: "clamp(2rem, 5vw, 2.8rem)",
         lineHeight: 1.05,
-    } satisfies React.CSSProperties,
+    },
     copy: {
         margin: "1rem 0 2rem",
         color: "#68738a",
         lineHeight: 1.6,
-    } satisfies React.CSSProperties,
+    },
     label: {
         display: "block",
         margin: "1rem 0 0.4rem",
         color: "#43506b",
         fontSize: "0.85rem",
         fontWeight: 700,
-    } satisfies React.CSSProperties,
+    },
     input: {
         width: "100%",
         padding: "0.8rem",
         border: "1px solid #dce2ee",
         borderRadius: "10px",
         outlineColor: "#315efb",
-    } satisfies React.CSSProperties,
+    },
     button: {
         width: "100%",
         marginTop: "1.5rem",
@@ -52,10 +52,10 @@ const STYLES = {
         color: "#fff",
         background: "#315efb",
         fontWeight: 700,
-    } satisfies React.CSSProperties,
+    },
     error: {
         color: "#bf3d4b",
-    } satisfies React.CSSProperties,
+    },
 } as const;
 
 export const LoginPage = (): React.JSX.Element => {

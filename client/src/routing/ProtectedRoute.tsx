@@ -1,13 +1,13 @@
 import { Navigate, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 
-const STYLES = {
+const STYLES: Record<string, React.CSSProperties> = {
     loading: {
         display: "grid",
         minHeight: "100vh",
         placeItems: "center",
         color: "#68738a",
-    } satisfies React.CSSProperties,
+    },
 } as const;
 
 export const ProtectedRoute = (): React.JSX.Element => {

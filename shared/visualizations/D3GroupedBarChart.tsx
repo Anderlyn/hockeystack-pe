@@ -14,13 +14,13 @@ export interface D3GroupedBarChartProps {
 }
 
 const margin = { top: 20, right: 24, bottom: 72, left: 56 };
-const STYLES = {
+const STYLES: Record<string, React.CSSProperties> = {
     svg: {
         display: "block",
         width: "100%",
         minWidth: "560px",
         height: "auto",
-    } satisfies React.CSSProperties,
+    },
 } as const;
 
 export const D3GroupedBarChart = ({

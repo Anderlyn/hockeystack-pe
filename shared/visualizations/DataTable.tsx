@@ -1,25 +1,25 @@
 import type { Row } from "../events";
 
-const STYLES = {
+const STYLES: Record<string, React.CSSProperties> = {
     wrapper: {
         maxWidth: "100%",
         overflowX: "auto",
-    } satisfies React.CSSProperties,
+    },
     table: {
         borderCollapse: "collapse",
         minWidth: "100%",
         textAlign: "left",
-    } satisfies React.CSSProperties,
+    },
     cell: {
         borderBottom: "1px solid #dfe4f0",
         padding: "10px 12px",
         whiteSpace: "nowrap",
-    } satisfies React.CSSProperties,
+    },
     header: {
         color: "#44506a",
         fontSize: "12px",
         textTransform: "uppercase",
-    } satisfies React.CSSProperties,
+    },
 } as const;
 
 export interface DataTableProps {
