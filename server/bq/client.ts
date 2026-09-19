@@ -1,0 +1,203 @@
+import { BigQuery } from "@google-cloud/bigquery";
+import { randomUUID } from "node:crypto";
+import type { Row, Primitive } from "../../shared/events";
+import { config } from "../config";
+import {
+    AppError,
+    ReadOnlyQueryError,
+    QueryCostLimitError,
+    BigQueryExecutionError,
+    errorMessage,
+} from "../exceptions";
+
+export const DATASET = "bigquery-public-data.ga4_obfuscated_sample_ecommerce";
+export const EVENTS_WILDCARD = `\`${DATASET}.events_*\``;
+
+const bq = new BigQuery({ projectId: config.projectId });
+
+export interface QueryResult {
+    result_id: string;
+    columns: string[];
+    rows: Row[];
+    total_rows: number;
+    bytes_processed: number;
+}
+
+// Single-instance result cache so render_chart and follow-ups can address prior
+// result sets by id without the model re-typing data. Production would move this
+// to Redis/Firestore (see preliminary-analysis.md → Cut).
+const resultCache = new Map<string, { columns: string[]; rows: Row[] }>();
+
+const normalize = (value: unknown): Primitive => {
+    if (value === null || value === undefined) return null;
+    if (
+        typeof value === "number" ||
+        typeof value === "boolean" ||
+        typeof value === "string"
+    ) {
+        return value;
+    }
+    // BigQuery wraps DATE/TIMESTAMP/NUMERIC etc. as objects carrying a `value` string.
+    if (
+        typeof value === "object" &&
+        "value" in (value as Record<string, unknown>)
+    ) {
+        return String((value as { value: unknown }).value);
+    }
+    return String(value);
+};
+
+const normalizeRows = (rows: Record<string, unknown>[]): Row[] =>
+    rows.map((r) => {
+        const out: Row = {};
+        for (const k of Object.keys(r)) out[k] = normalize(r[k]);
+        return out;
+    });
+
+const assertReadOnly = (sql: string): void => {
+    const stripped = sql
+        .replace(/--[^\n]*/g, "")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .trim();
+    const first = stripped.split(/\s+/)[0]?.toUpperCase() ?? "";
+    if (first !== "SELECT" && first !== "WITH") {
+        throw new ReadOnlyQueryError(
+            `it must be a single statement starting with SELECT or WITH (got "${first || "empty query"}").`,
+        );
+    }
+    const dml = stripped.match(
+        /\b(INSERT|UPDATE|DELETE|MERGE|CREATE|DROP|ALTER|TRUNCATE|GRANT|REVOKE|CALL|EXPORT)\b/i,
+    );
+    if (dml) {
+        throw new ReadOnlyQueryError(
+            `it contains the disallowed statement keyword "${dml[1].toUpperCase()}". This tool is read-only.`,
+        );
+    }
+};
+
+const columnsFrom = (
+    apiResponse:
+        { schema?: { fields?: { name?: string | null }[] } } | undefined,
+    rows: Record<string, unknown>[],
+): string[] => {
+    const fromSchema = (apiResponse?.schema?.fields ?? [])
+        .map((f) => f.name ?? "")
+        .filter((n) => n.length > 0);
+    if (fromSchema.length > 0) return fromSchema;
+    return rows.length > 0 ? Object.keys(rows[0]) : [];
+};
+
+// Run a BigQuery operation, wrapping any BigQuery/transport failure in a typed
+// error that preserves BigQuery's own message (so the model can self-correct).
+const runBq = async <T>(query: string, op: () => Promise<T>): Promise<T> => {
+    try {
+        return await op();
+    } catch (err) {
+        if (err instanceof AppError) throw err;
+        throw new BigQueryExecutionError(errorMessage(err), query, err);
+    }
+};
+
+const dryRunBytes = async (query: string): Promise<number> =>
+    runBq(query, async () => {
+        const [job] = await bq.createQueryJob({
+            query,
+            dryRun: true,
+            location: config.bqLocation,
+        });
+        const total = job.metadata?.statistics?.totalBytesProcessed;
+        return total ? Number(total) : 0;
+    });
+
+/**
+ * Low-level query for the schema/profile tools: parameterized, not cached, not
+ * streamed. Still pinned to the dataset location with a byte cap as a backstop.
+ */
+export const internalQuery = async (
+    query: string,
+    params?: Record<string, unknown>,
+): Promise<{ columns: string[]; rows: Row[] }> =>
+    runBq(query, async () => {
+        const [job] = await bq.createQueryJob({
+            query,
+            params,
+            location: config.bqLocation,
+            maximumBytesBilled: String(config.maxBytesBilled),
+        });
+        const [rows, , apiResponse] = await job.getQueryResults();
+        const typedRows = rows as Record<string, unknown>[];
+        return {
+            columns: columnsFrom(apiResponse, typedRows),
+            rows: normalizeRows(typedRows),
+        };
+    });
+
+/**
+ * Model-facing query: read-only guard -> dry-run cost check -> execute with a
+ * hard maximumBytesBilled -> cache the full result under a result_id.
+ */
+export const runSql = async (query: string): Promise<QueryResult> => {
+    assertReadOnly(query);
+
+    const bytes = await dryRunBytes(query);
+    if (bytes > config.maxBytesBilled) {
+        throw new QueryCostLimitError(bytes, config.maxBytesBilled);
+    }
+
+    const { columns, rows } = await runBq(query, async () => {
+        const [job] = await bq.createQueryJob({
+            query,
+            location: config.bqLocation,
+            maximumBytesBilled: String(config.maxBytesBilled),
+        });
+        const [resultRows, , apiResponse] = await job.getQueryResults();
+        const typedRows = resultRows as Record<string, unknown>[];
+        return {
+            columns: columnsFrom(apiResponse, typedRows),
+            rows: normalizeRows(typedRows),
+        };
+    });
+
+    const result_id = `res_${randomUUID().slice(0, 8)}`;
+    resultCache.set(result_id, { columns, rows });
+    return {
+        result_id,
+        columns,
+        rows,
+        total_rows: rows.length,
+        bytes_processed: bytes,
+    };
+};
+
+export const getCachedResult = (
+    id: string,
+): { columns: string[]; rows: Row[] } | undefined => resultCache.get(id);
+
+let tableInfo: {
+    earliest: string;
+    latest: string;
+    earliestSuffix: string;
+    latestSuffix: string;
+} | null = null;
+
+/** Earliest/latest daily table (and their YYYYMMDD suffixes), cached. */
+export const getTableInfo = async () => {
+    if (tableInfo) return tableInfo;
+    const { rows } = await internalQuery(
+        `SELECT MIN(table_id) AS earliest, MAX(table_id) AS latest
+         FROM \`${DATASET}.__TABLES__\`
+         WHERE STARTS_WITH(table_id, 'events_')`,
+    );
+    const earliest = String(rows[0]?.earliest ?? "events_20201101");
+    const latest = String(rows[0]?.latest ?? "events_20210131");
+    tableInfo = {
+        earliest,
+        latest,
+        earliestSuffix: earliest.replace("events_", ""),
+        latestSuffix: latest.replace("events_", ""),
+    };
+    return tableInfo;
+};
+
+export const dailyTable = (tableId: string): string =>
+    `\`${DATASET}.${tableId}\``;
